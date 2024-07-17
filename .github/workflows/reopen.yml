@@ -1,0 +1,99 @@
+# мощно, потому не удалю, чекай зачем всё это в строке "(последнее - это попытка..."
+# но пришел по итогу от script к run, т.к. нужно максимально уменьшить окно между проверкой и отправкой.
+# вроде как задержка между шагами script и if + run ощутимая, по крайней мере у меня получилось в неё влезть и закрыть issue когда метки ещё не было, а на момент открытия метка уже появлялась
+# поэтому ступил на путь терминального программирования исключительно через run
+
+# name: Reopen issue if closed by author
+
+# on:
+#   issues:
+#     types: [closed]
+
+# jobs:
+#   reopen:
+#     runs-on: ubuntu-latest
+#     permissions:
+#       issues: write
+
+#     steps:
+#       - name: Check who edited the issue
+#         id: check_closer
+#         uses: actions/github-script@v7
+#         with:
+#           # если автор закрыл свой же issue и на момент открытия issue это не повтор 
+#           # (последнее - это попытка обуздать баг с закрытием после открытия issue спустя некоторое время, сперва он закроется как копия, но откроется через reopen) 
+#           script: |
+#             const issue = context.payload.issue;
+#             const closer = context.actor;
+#             const author = issue.user.login; 
+#             const labels = issue.labels.map(label => label.name);
+
+#             // Проверяем наличие метки "несколько отзывов"
+#             const fewIssue = labels.includes("несколько отзывов");
+#             console.log("labels:", labels);
+#             console.log("fewIssue:", fewIssue);
+
+#             const timeToOpen = closer === author && !fewIssue;
+#             core.exportVariable('needOpen', timeToOpen ? 'true' : 'false');
+#           # про core и context можно отсюда подробнее чекнуть(+про сам github-script@v7): https://github.com/actions/github-script?tab=readme-ov-file
+      
+#       - name: Reopen issue
+#         if: env.needOpen == 'true'
+#         run: |
+#           curl -X PATCH \
+#             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+#             -H "Accept: application/vnd.github.v3+json" \
+#             https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }} \
+#             -d '{"state": "open"}'
+
+
+name: REOPEN issue if closed by author and CLOSE else
+
+on:
+  issues:
+    types: [closed, reopened]
+
+jobs:
+  reopen:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Check and reopen issue if conditions are met
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          EVENT_PAYLOAD: ${{ toJson(github.event) }}
+        run: |
+          # Получение данных о issue
+          AUTHOR=$(echo "$EVENT_PAYLOAD" | jq -r .issue.user.login)
+
+          # Проверка наличия метки "несколько отзывов"
+          LABELS=$(curl -s -H "Authorization: token $TOKEN" "https://api.github.com/repos/$REPO/issues/$ISSUE_NUMBER" | jq -r '.labels[].name')
+
+          # Вывод значений переменных для отладки
+          echo "ACTOR: $ACTOR"
+          echo "AUTHOR: $AUTHOR"
+          echo "LABELS: $LABELS"
+
+          # Проверка наличия метки "несколько отзывов"
+          LABEL_PRESENT=$(echo "$LABELS" | grep -q "несколько отзывов"; echo $?)
+          echo "LABEL_PRESENT (0 если найдена, 1 если не найдена): $LABEL_PRESENT"
+
+          if [[ "$ACTOR" == "$AUTHOR" && "$LABEL_PRESENT" -eq 1 ]]; then
+            echo "Reopening issue #$ISSUE_NUMBER"
+            curl -X PATCH \
+              -H "Authorization: token $TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              https://api.github.com/repos/$REPO/issues/$ISSUE_NUMBER \
+              -d '{"state": "open"}'
+          else
+            curl -X PATCH \
+              -H "Authorization: token $TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              https://api.github.com/repos/$REPO/issues/$ISSUE_NUMBER \
+              -d '{"state": "closed"}'
+          fi
